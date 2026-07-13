@@ -1,0 +1,25 @@
+// payment.proto — 결제 서버(payment-server)가 "제공하는" 서비스 계약서.
+//
+// order-server가 이 proto로 코드를 생성해 "PaymentService 클라이언트 스텁"을
+// 만들어 결제를 요청합니다.
+
+syntax = "proto3";
+
+package payment;
+
+option go_package = "grpc-tutorial/gen/paymentpb";
+
+service PaymentService {
+  // order-server가 주문 생성 시 결제를 요청하려고 호출.
+  rpc ProcessPayment(ProcessPaymentRequest) returns (ProcessPaymentReply);
+}
+
+message ProcessPaymentRequest {
+  string order_id = 1;
+  int32 amount = 2;
+}
+
+message ProcessPaymentReply {
+  bool approved = 1;
+  string transaction_id = 2;
+}

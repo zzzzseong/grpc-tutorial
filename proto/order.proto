@@ -1,0 +1,39 @@
+// order.proto — 주문 서버(order-server)가 "제공하는" 서비스 계약서.
+//
+// 주의: 이 계약서를 order-server만 갖는 게 아닙니다.
+// payment-server도 order-server를 호출해야 하므로 이 proto로 코드를 생성해
+// "OrderService 클라이언트 스텁"을 만들어 씁니다. → 계약서는 공유됩니다.
+
+syntax = "proto3";
+
+package order;
+
+option go_package = "grpc-tutorial/gen/orderpb";
+
+service OrderService {
+  // 외부(또는 trigger)에서 주문 생성을 요청할 때 호출.
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderReply);
+
+  // payment-server가 "결제 끝났으니 주문 상태 바꿔줘"라고 호출할 때 사용.
+  // → 이 rpc 하나 때문에 payment-server가 order-server의 client가 됩니다.
+  rpc UpdateOrderStatus(UpdateOrderStatusRequest) returns (UpdateOrderStatusReply);
+}
+
+message CreateOrderRequest {
+  string item = 1;    // 주문 상품
+  int32 amount = 2;   // 결제 금액(원)
+}
+
+message CreateOrderReply {
+  string order_id = 1;
+  string status = 2;  // 최종 주문 상태 (예: PAID)
+}
+
+message UpdateOrderStatusRequest {
+  string order_id = 1;
+  string status = 2;
+}
+
+message UpdateOrderStatusReply {
+  bool ok = 1;
+}
