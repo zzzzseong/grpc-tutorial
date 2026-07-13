@@ -130,6 +130,59 @@ func (x *ProcessPaymentReply) GetTransactionId() string {
 	return ""
 }
 
+// 스트림으로 흘려보낼 결제 진행 상황 한 조각.
+type PaymentProgress struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Stage         string                 `protobuf:"bytes,1,opt,name=stage,proto3" json:"stage,omitempty"`                                      // VALIDATING → AUTHORIZING → APPROVED
+	TransactionId string                 `protobuf:"bytes,2,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"` // APPROVED 단계에서만 채워짐
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PaymentProgress) Reset() {
+	*x = PaymentProgress{}
+	mi := &file_proto_payment_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PaymentProgress) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PaymentProgress) ProtoMessage() {}
+
+func (x *PaymentProgress) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_payment_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PaymentProgress.ProtoReflect.Descriptor instead.
+func (*PaymentProgress) Descriptor() ([]byte, []int) {
+	return file_proto_payment_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *PaymentProgress) GetStage() string {
+	if x != nil {
+		return x.Stage
+	}
+	return ""
+}
+
+func (x *PaymentProgress) GetTransactionId() string {
+	if x != nil {
+		return x.TransactionId
+	}
+	return ""
+}
+
 var File_proto_payment_proto protoreflect.FileDescriptor
 
 const file_proto_payment_proto_rawDesc = "" +
@@ -140,9 +193,13 @@ const file_proto_payment_proto_rawDesc = "" +
 	"\x06amount\x18\x02 \x01(\x05R\x06amount\"X\n" +
 	"\x13ProcessPaymentReply\x12\x1a\n" +
 	"\bapproved\x18\x01 \x01(\bR\bapproved\x12%\n" +
-	"\x0etransaction_id\x18\x02 \x01(\tR\rtransactionId2`\n" +
+	"\x0etransaction_id\x18\x02 \x01(\tR\rtransactionId\"N\n" +
+	"\x0fPaymentProgress\x12\x14\n" +
+	"\x05stage\x18\x01 \x01(\tR\x05stage\x12%\n" +
+	"\x0etransaction_id\x18\x02 \x01(\tR\rtransactionId2\xb4\x01\n" +
 	"\x0ePaymentService\x12N\n" +
-	"\x0eProcessPayment\x12\x1e.payment.ProcessPaymentRequest\x1a\x1c.payment.ProcessPaymentReplyB\x1dZ\x1bgrpc-tutorial/gen/paymentpbb\x06proto3"
+	"\x0eProcessPayment\x12\x1e.payment.ProcessPaymentRequest\x1a\x1c.payment.ProcessPaymentReply\x12R\n" +
+	"\x14ProcessPaymentStream\x12\x1e.payment.ProcessPaymentRequest\x1a\x18.payment.PaymentProgress0\x01B\x1dZ\x1bgrpc-tutorial/gen/paymentpbb\x06proto3"
 
 var (
 	file_proto_payment_proto_rawDescOnce sync.Once
@@ -156,16 +213,19 @@ func file_proto_payment_proto_rawDescGZIP() []byte {
 	return file_proto_payment_proto_rawDescData
 }
 
-var file_proto_payment_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_proto_payment_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_proto_payment_proto_goTypes = []any{
 	(*ProcessPaymentRequest)(nil), // 0: payment.ProcessPaymentRequest
 	(*ProcessPaymentReply)(nil),   // 1: payment.ProcessPaymentReply
+	(*PaymentProgress)(nil),       // 2: payment.PaymentProgress
 }
 var file_proto_payment_proto_depIdxs = []int32{
 	0, // 0: payment.PaymentService.ProcessPayment:input_type -> payment.ProcessPaymentRequest
-	1, // 1: payment.PaymentService.ProcessPayment:output_type -> payment.ProcessPaymentReply
-	1, // [1:2] is the sub-list for method output_type
-	0, // [0:1] is the sub-list for method input_type
+	0, // 1: payment.PaymentService.ProcessPaymentStream:input_type -> payment.ProcessPaymentRequest
+	1, // 2: payment.PaymentService.ProcessPayment:output_type -> payment.ProcessPaymentReply
+	2, // 3: payment.PaymentService.ProcessPaymentStream:output_type -> payment.PaymentProgress
+	2, // [2:4] is the sub-list for method output_type
+	0, // [0:2] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -182,7 +242,7 @@ func file_proto_payment_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_payment_proto_rawDesc), len(file_proto_payment_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

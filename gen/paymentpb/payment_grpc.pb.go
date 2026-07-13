@@ -24,7 +24,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PaymentService_ProcessPayment_FullMethodName = "/payment.PaymentService/ProcessPayment"
+	PaymentService_ProcessPayment_FullMethodName       = "/payment.PaymentService/ProcessPayment"
+	PaymentService_ProcessPaymentStream_FullMethodName = "/payment.PaymentService/ProcessPaymentStream"
 )
 
 // PaymentServiceClient is the client API for PaymentService service.
@@ -33,6 +34,11 @@ const (
 type PaymentServiceClient interface {
 	// order-server가 주문 생성 시 결제를 요청하려고 호출.
 	ProcessPayment(ctx context.Context, in *ProcessPaymentRequest, opts ...grpc.CallOption) (*ProcessPaymentReply, error)
+	// [2단계: Server Streaming]
+	// returns 앞의 `stream` 키워드가 핵심입니다.
+	// 요청은 1개지만, 응답은 연결이 열린 채로 여러 개가 순서대로 흘러옵니다.
+	// 결제가 진행되는 동안 중간 상태를 실시간으로 알려줄 수 있습니다.
+	ProcessPaymentStream(ctx context.Context, in *ProcessPaymentRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PaymentProgress], error)
 }
 
 type paymentServiceClient struct {
@@ -53,12 +59,36 @@ func (c *paymentServiceClient) ProcessPayment(ctx context.Context, in *ProcessPa
 	return out, nil
 }
 
+func (c *paymentServiceClient) ProcessPaymentStream(ctx context.Context, in *ProcessPaymentRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PaymentProgress], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &PaymentService_ServiceDesc.Streams[0], PaymentService_ProcessPaymentStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ProcessPaymentRequest, PaymentProgress]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PaymentService_ProcessPaymentStreamClient = grpc.ServerStreamingClient[PaymentProgress]
+
 // PaymentServiceServer is the server API for PaymentService service.
 // All implementations must embed UnimplementedPaymentServiceServer
 // for forward compatibility.
 type PaymentServiceServer interface {
 	// order-server가 주문 생성 시 결제를 요청하려고 호출.
 	ProcessPayment(context.Context, *ProcessPaymentRequest) (*ProcessPaymentReply, error)
+	// [2단계: Server Streaming]
+	// returns 앞의 `stream` 키워드가 핵심입니다.
+	// 요청은 1개지만, 응답은 연결이 열린 채로 여러 개가 순서대로 흘러옵니다.
+	// 결제가 진행되는 동안 중간 상태를 실시간으로 알려줄 수 있습니다.
+	ProcessPaymentStream(*ProcessPaymentRequest, grpc.ServerStreamingServer[PaymentProgress]) error
 	mustEmbedUnimplementedPaymentServiceServer()
 }
 
@@ -71,6 +101,9 @@ type UnimplementedPaymentServiceServer struct{}
 
 func (UnimplementedPaymentServiceServer) ProcessPayment(context.Context, *ProcessPaymentRequest) (*ProcessPaymentReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method ProcessPayment not implemented")
+}
+func (UnimplementedPaymentServiceServer) ProcessPaymentStream(*ProcessPaymentRequest, grpc.ServerStreamingServer[PaymentProgress]) error {
+	return status.Error(codes.Unimplemented, "method ProcessPaymentStream not implemented")
 }
 func (UnimplementedPaymentServiceServer) mustEmbedUnimplementedPaymentServiceServer() {}
 func (UnimplementedPaymentServiceServer) testEmbeddedByValue()                        {}
@@ -111,6 +144,17 @@ func _PaymentService_ProcessPayment_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PaymentService_ProcessPaymentStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ProcessPaymentRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(PaymentServiceServer).ProcessPaymentStream(m, &grpc.GenericServerStream[ProcessPaymentRequest, PaymentProgress]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PaymentService_ProcessPaymentStreamServer = grpc.ServerStreamingServer[PaymentProgress]
+
 // PaymentService_ServiceDesc is the grpc.ServiceDesc for PaymentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -123,6 +167,12 @@ var PaymentService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PaymentService_ProcessPayment_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "ProcessPaymentStream",
+			Handler:       _PaymentService_ProcessPaymentStream_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "proto/payment.proto",
 }

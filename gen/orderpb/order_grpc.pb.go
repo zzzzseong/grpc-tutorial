@@ -25,8 +25,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	OrderService_CreateOrder_FullMethodName       = "/order.OrderService/CreateOrder"
-	OrderService_UpdateOrderStatus_FullMethodName = "/order.OrderService/UpdateOrderStatus"
+	OrderService_CreateOrder_FullMethodName             = "/order.OrderService/CreateOrder"
+	OrderService_UpdateOrderStatus_FullMethodName       = "/order.OrderService/UpdateOrderStatus"
+	OrderService_CreateOrderWithProgress_FullMethodName = "/order.OrderService/CreateOrderWithProgress"
 )
 
 // OrderServiceClient is the client API for OrderService service.
@@ -38,6 +39,10 @@ type OrderServiceClient interface {
 	// payment-server가 "결제 끝났으니 주문 상태 바꿔줘"라고 호출할 때 사용.
 	// → 이 rpc 하나 때문에 payment-server가 order-server의 client가 됩니다.
 	UpdateOrderStatus(ctx context.Context, in *UpdateOrderStatusRequest, opts ...grpc.CallOption) (*UpdateOrderStatusReply, error)
+	// [2단계: Server Streaming]
+	// CreateOrder의 스트리밍 버전. 주문 생성~결제 완료까지의
+	// 진행 상황을 호출자에게 실시간으로 흘려보냅니다.
+	CreateOrderWithProgress(ctx context.Context, in *CreateOrderRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[OrderProgress], error)
 }
 
 type orderServiceClient struct {
@@ -68,6 +73,25 @@ func (c *orderServiceClient) UpdateOrderStatus(ctx context.Context, in *UpdateOr
 	return out, nil
 }
 
+func (c *orderServiceClient) CreateOrderWithProgress(ctx context.Context, in *CreateOrderRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[OrderProgress], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &OrderService_ServiceDesc.Streams[0], OrderService_CreateOrderWithProgress_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[CreateOrderRequest, OrderProgress]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type OrderService_CreateOrderWithProgressClient = grpc.ServerStreamingClient[OrderProgress]
+
 // OrderServiceServer is the server API for OrderService service.
 // All implementations must embed UnimplementedOrderServiceServer
 // for forward compatibility.
@@ -77,6 +101,10 @@ type OrderServiceServer interface {
 	// payment-server가 "결제 끝났으니 주문 상태 바꿔줘"라고 호출할 때 사용.
 	// → 이 rpc 하나 때문에 payment-server가 order-server의 client가 됩니다.
 	UpdateOrderStatus(context.Context, *UpdateOrderStatusRequest) (*UpdateOrderStatusReply, error)
+	// [2단계: Server Streaming]
+	// CreateOrder의 스트리밍 버전. 주문 생성~결제 완료까지의
+	// 진행 상황을 호출자에게 실시간으로 흘려보냅니다.
+	CreateOrderWithProgress(*CreateOrderRequest, grpc.ServerStreamingServer[OrderProgress]) error
 	mustEmbedUnimplementedOrderServiceServer()
 }
 
@@ -92,6 +120,9 @@ func (UnimplementedOrderServiceServer) CreateOrder(context.Context, *CreateOrder
 }
 func (UnimplementedOrderServiceServer) UpdateOrderStatus(context.Context, *UpdateOrderStatusRequest) (*UpdateOrderStatusReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateOrderStatus not implemented")
+}
+func (UnimplementedOrderServiceServer) CreateOrderWithProgress(*CreateOrderRequest, grpc.ServerStreamingServer[OrderProgress]) error {
+	return status.Error(codes.Unimplemented, "method CreateOrderWithProgress not implemented")
 }
 func (UnimplementedOrderServiceServer) mustEmbedUnimplementedOrderServiceServer() {}
 func (UnimplementedOrderServiceServer) testEmbeddedByValue()                      {}
@@ -150,6 +181,17 @@ func _OrderService_UpdateOrderStatus_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _OrderService_CreateOrderWithProgress_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(CreateOrderRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(OrderServiceServer).CreateOrderWithProgress(m, &grpc.GenericServerStream[CreateOrderRequest, OrderProgress]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type OrderService_CreateOrderWithProgressServer = grpc.ServerStreamingServer[OrderProgress]
+
 // OrderService_ServiceDesc is the grpc.ServiceDesc for OrderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -166,6 +208,12 @@ var OrderService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _OrderService_UpdateOrderStatus_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "CreateOrderWithProgress",
+			Handler:       _OrderService_CreateOrderWithProgress_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "proto/order.proto",
 }

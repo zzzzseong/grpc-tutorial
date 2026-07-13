@@ -3,12 +3,14 @@
 // 이 프로세스 하나가 두 가지 역할을 동시에 합니다:
 //   - server 역할: OrderService를 구현하고 :50051 포트를 엽니다.
 //   - client 역할: payment-server의 PaymentService 스텁을 들고 결제를 호출합니다.
+//
 // 즉 "gRPC 서버 = 남을 못 부른다"가 아니라, 한 서버가 서버이자 클라이언트입니다.
 package main
 
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"sync"
@@ -31,7 +33,7 @@ type orderServer struct {
 	seq    int
 }
 
-// CreateOrder: 외부에서 주문 생성을 요청하면 실행 (order-server가 server 역할).
+// CreateOrder 외부에서 주문 생성을 요청하면 실행 (order-server가 server 역할).
 func (s *orderServer) CreateOrder(ctx context.Context, req *orderpb.CreateOrderRequest) (*orderpb.CreateOrderReply, error) {
 	// 1. 주문을 만들어 CREATED 상태로 저장
 	s.mu.Lock()
@@ -62,7 +64,80 @@ func (s *orderServer) CreateOrder(ctx context.Context, req *orderpb.CreateOrderR
 	return &orderpb.CreateOrderReply{OrderId: orderID, Status: status}, nil
 }
 
-// UpdateOrderStatus: payment-server가 결제 완료 후 이 메서드를 호출합니다.
+// CreateOrderWithProgress [2단계: Server Streaming] CreateOrder의 스트리밍 버전.
+//
+// 이 함수는 스트리밍의 양쪽 입장을 동시에 보여줍니다:
+//   - 서버로서: stream.Send()로 호출자(trigger)에게 진행 상황을 흘려보냄
+//   - 클라이언트로서: payStream.Recv()로 payment-server의 스트림을 받아옴
+//
+// 즉 payment의 진행 상황을 받는 족족 내 호출자에게 릴레이하는 구조입니다.
+func (s *orderServer) CreateOrderWithProgress(req *orderpb.CreateOrderRequest, stream orderpb.OrderService_CreateOrderWithProgressServer) error {
+	// 1. 주문 생성 (unary 버전과 동일)
+	s.mu.Lock()
+	s.seq++
+	orderID := fmt.Sprintf("ORD-%03d", s.seq)
+	s.orders[orderID] = "CREATED"
+	s.mu.Unlock()
+
+	// 첫 조각 전송: 주문 생성됨
+	if err := stream.Send(&orderpb.OrderProgress{
+		OrderId: orderID, Stage: "CREATED",
+		Message: fmt.Sprintf("주문 접수 (%s, %d원)", req.GetItem(), req.GetAmount()),
+	}); err != nil {
+		return err
+	}
+	log.Printf("[order] (stream) 주문 생성 %s → payment 스트림 구독 시작", orderID)
+
+	// 2. payment-server의 스트리밍 rpc 호출.
+	//    unary와 달리 응답이 바로 오지 않고 "수신용 스트림"이 돌아옵니다.
+	payStream, err := s.payment.ProcessPaymentStream(stream.Context(), &paymentpb.ProcessPaymentRequest{
+		OrderId: orderID,
+		Amount:  req.GetAmount(),
+	})
+	if err != nil {
+		return err
+	}
+
+	// 3. 스트림 수신 루프. 서버가 return할 때까지 Recv()가 조각을 하나씩 꺼내주고,
+	//    스트림이 끝나면 io.EOF가 옵니다. 이 패턴은 정해진 관용구입니다.
+	for {
+		prog, err := payStream.Recv()
+		if err == io.EOF {
+			break // payment-server가 스트림을 정상 종료함
+		}
+		if err != nil {
+			return err
+		}
+
+		// 받은 조각을 내 호출자에게 릴레이
+		msg := "결제 진행 중"
+		if prog.GetStage() == "APPROVED" {
+			msg = "결제 승인 " + prog.GetTransactionId()
+		}
+		if err := stream.Send(&orderpb.OrderProgress{
+			OrderId: orderID, Stage: "PAYMENT_" + prog.GetStage(), Message: msg,
+		}); err != nil {
+			return err
+		}
+		log.Printf("[order] (stream)   payment %s 수신 → 릴레이", prog.GetStage())
+	}
+
+	// 4. 마지막 조각: 최종 주문 상태
+	//    (스트림 도중 payment-server가 UpdateOrderStatus를 호출해 PAID로 바뀐 상태)
+	s.mu.Lock()
+	status := s.orders[orderID]
+	s.mu.Unlock()
+	if err := stream.Send(&orderpb.OrderProgress{
+		OrderId: orderID, Stage: status, Message: "주문 처리 완료",
+	}); err != nil {
+		return err
+	}
+	log.Printf("[order] (stream) 주문 %s 완료: 최종상태=%s", orderID, status)
+
+	return nil
+}
+
+// UpdateOrderStatus payment-server가 결제 완료 후 이 메서드를 호출합니다.
 // (order-server가 server 역할, payment-server가 client 역할)
 func (s *orderServer) UpdateOrderStatus(ctx context.Context, req *orderpb.UpdateOrderStatusRequest) (*orderpb.UpdateOrderStatusReply, error) {
 	s.mu.Lock()

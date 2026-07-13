@@ -17,6 +17,11 @@ service OrderService {
   // payment-server가 "결제 끝났으니 주문 상태 바꿔줘"라고 호출할 때 사용.
   // → 이 rpc 하나 때문에 payment-server가 order-server의 client가 됩니다.
   rpc UpdateOrderStatus(UpdateOrderStatusRequest) returns (UpdateOrderStatusReply);
+
+  // [2단계: Server Streaming]
+  // CreateOrder의 스트리밍 버전. 주문 생성~결제 완료까지의
+  // 진행 상황을 호출자에게 실시간으로 흘려보냅니다.
+  rpc CreateOrderWithProgress(CreateOrderRequest) returns (stream OrderProgress);
 }
 
 message CreateOrderRequest {
@@ -36,4 +41,11 @@ message UpdateOrderStatusRequest {
 
 message UpdateOrderStatusReply {
   bool ok = 1;
+}
+
+// 스트림으로 흘려보낼 주문 진행 상황 한 조각.
+message OrderProgress {
+  string order_id = 1;
+  string stage = 2;   // CREATED → PAYMENT_VALIDATING → ... → PAID
+  string message = 3; // 사람이 읽을 설명
 }
