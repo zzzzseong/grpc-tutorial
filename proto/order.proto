@@ -28,6 +28,13 @@ service OrderService {
   // 클라이언트가 장바구니 상품을 하나씩 여러 번 보내고,
   // 서버는 다 받은 뒤 합산해서 응답 1개로 마무리합니다.
   rpc CreateBulkOrder(stream CartItem) returns (CreateBulkOrderReply);
+
+  // [4단계: Bidirectional Streaming]
+  // 양쪽 모두에 `stream`이 붙습니다. 요청 스트림과 응답 스트림이
+  // 독립적으로 흐르는 전이중(full-duplex) 통신입니다.
+  // 클라이언트가 주문을 연달아 보내면, 서버는 각 주문을 병렬로 처리해
+  // "끝나는 순서대로" 결과를 돌려보냅니다 (보낸 순서와 다를 수 있음).
+  rpc OrderSession(stream CreateOrderRequest) returns (stream OrderResult);
 }
 
 message CreateOrderRequest {
@@ -67,4 +74,11 @@ message CreateBulkOrderReply {
   string status = 2;
   int32 item_count = 3;   // 받은 상품 수
   int32 total_amount = 4; // 합산 금액
+}
+
+// 세션 안에서 주문 하나가 끝날 때마다 돌려보내는 결과.
+message OrderResult {
+  string order_id = 1;
+  string item = 2;
+  string status = 3;
 }

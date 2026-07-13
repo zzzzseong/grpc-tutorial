@@ -72,6 +72,7 @@ go run ./payment-server   # 터미널 2: 결제 서버 :50052
 go run ./trigger          # 터미널 3: 주문 한 건 발사 — 1단계 unary 버전
 go run ./trigger stream   # 터미널 3: 같은 주문을 2단계 streaming 버전으로
 go run ./trigger bulk     # 터미널 3: 장바구니 주문 — 3단계 client streaming 버전
+go run ./trigger session  # 터미널 3: 주문 세션 — 4단계 bidirectional streaming 버전
 ```
 
 성공하면 trigger에 `주문 결과: id=ORD-001, status=PAID`가 출력되고, 두 서버 로그에서 상호 호출 과정을 볼 수 있습니다.
@@ -216,9 +217,55 @@ sequenceDiagram
 - **클라이언트 관용구**: 스트림을 열고 `Send()` 반복 → **`CloseAndRecv()`** 로 "다 보냈다"고 알리고 응답을 기다림. 이 호출이 서버의 `Recv()`에 `io.EOF`를 발생시킵니다.
 - **2단계와의 대칭**: server streaming의 `Send 반복/return` ↔ client streaming의 `SendAndClose`, `Recv 루프/io.EOF`는 양쪽에서 같은 관용구로 재사용됩니다.
 
-### ⬜ 4단계: Bidirectional Streaming
+### ✅ 4단계: Bidirectional Streaming (완료)
 
-하나의 호출 안에서 양쪽이 스트림으로 주고받음. 예: 채팅, 실시간 협업.
+**요청 여러 개 ↔ 응답 여러 개**, 하나의 연결 위에서 동시에. 핑퐁(요청 하나-응답 하나 교대)이 아니라 **전이중(full-duplex)** — 송신과 수신이 서로를 기다리지 않습니다. 예: 채팅, 실시간 협업, 장시간 유지되는 처리 파이프라인.
+
+**추가된 것**
+
+| 무엇 | 어디에 |
+|---|---|
+| `rpc OrderSession(stream CreateOrderRequest) returns (stream OrderResult)` | `proto/order.proto` → order-server가 구현 |
+| 실행 | `go run ./trigger session` |
+
+**동작 방식** — trigger가 주문을 연달아 흘려보내면, order-server는 주문마다 goroutine을 띄워 병렬 처리하고 **끝나는 순서대로** 결과를 돌려보냅니다. 금액이 클수록 심사가 오래 걸리게 해뒀기 때문에, 먼저 보낸 주문의 결과가 나중에 도착합니다:
+
+```mermaid
+sequenceDiagram
+    participant T as trigger
+    participant O as order-server
+
+    T->>O: OrderSession 스트림 열기
+    T-->>O: 노트북 (9000원) — 처리 느림
+    T-->>O: 커피 (4500원)
+    T-->>O: 쿠키 (1500원) — 처리 빠름
+    T->>O: CloseSend (송신만 종료, 수신은 계속!)
+    Note over O: 주문 3건을 goroutine으로 병렬 처리<br/>(각각 payment-server 결제 포함)
+    O-->>T: 쿠키 PAID ← 제일 먼저 완료
+    O-->>T: 커피 PAID
+    O-->>T: 노트북 PAID ← 제일 늦게 완료
+    Note over T,O: 서버 함수 return ⏹ 스트림 종료(io.EOF)
+```
+
+실제 실행 결과 — 보낸 순서(노트북→커피→쿠키)와 **반대 순서**로 결과가 도착합니다:
+
+```
+[trigger] → 주문 전송: 노트북 (9000원)
+[trigger] → 주문 전송: 커피 (4500원)
+[trigger] → 주문 전송: 쿠키 (1500원)
+[trigger] 송신 종료. 남은 결과 수신 대기...
+[trigger] ← 결과 도착: ORD-003 (쿠키) PAID
+[trigger] ← 결과 도착: ORD-002 (커피) PAID
+[trigger] ← 결과 도착: ORD-001 (노트북) PAID
+```
+
+배운 것:
+
+- **proto 문법**: 파라미터와 returns 양쪽 모두에 `stream` — 4가지 방식 중 마지막 조합입니다.
+- **클라이언트에 goroutine 필수**: 송신과 수신이 동시에 일어나므로, 수신 루프를 별도 goroutine으로 돌리면서 메인에서 `Send`합니다 (`trigger`의 `runSession`).
+- **`CloseSend`**: "더 보낼 요청 없음"만 알리고 수신은 계속합니다. 3단계의 `CloseAndRecv`(응답 1개를 기다림)와 다른 점에 주의.
+- **서버의 병렬 처리 + Send 뮤텍스**: 주문마다 goroutine으로 처리하되, `stream.Send`는 동시 호출이 금지라 뮤텍스로 직렬화합니다. 스트림 종료 전 `wg.Wait()`로 진행 중인 작업을 기다립니다.
+- **순서 보장의 범위**: gRPC는 "보낸 메시지의 전달 순서"는 보장하지만, 애플리케이션이 병렬 처리하면 "응답 생성 순서"는 애플리케이션 책임입니다.
 
 ### ⬜ 5단계: 실무 필수 요소
 

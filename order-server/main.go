@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -189,6 +190,75 @@ func (s *orderServer) CreateBulkOrder(stream orderpb.OrderService_CreateBulkOrde
 		ItemCount:   int32(len(items)),
 		TotalAmount: total,
 	})
+}
+
+// OrderSession [4단계: Bidirectional Streaming] 주문 세션.
+//
+// 요청 스트림과 응답 스트림이 독립적으로 흐르는 전이중 통신입니다.
+// "요청 하나 받고 → 응답 하나 보내고"의 핑퐁이 아니라,
+// 수신 루프는 계속 돌면서 주문마다 goroutine을 띄워 병렬 처리하고,
+// 각 goroutine이 끝나는 순서대로 결과를 Send합니다.
+// → 그래서 결과가 보낸 순서와 다르게 도착할 수 있습니다.
+func (s *orderServer) OrderSession(stream orderpb.OrderService_OrderSessionServer) error {
+	var (
+		wg     sync.WaitGroup
+		sendMu sync.Mutex // stream.Send는 동시 호출이 금지되어 있어 뮤텍스로 직렬화합니다
+	)
+
+	// 수신 루프: 클라이언트가 CloseSend할 때까지 주문을 계속 받습니다.
+	for {
+		req, err := stream.Recv()
+		if err == io.EOF {
+			break // 클라이언트 송신 종료. 단, 처리 중인 주문이 남아 있을 수 있음
+		}
+		if err != nil {
+			return err
+		}
+
+		// 주문 생성
+		s.mu.Lock()
+		s.seq++
+		orderID := fmt.Sprintf("ORD-%03d", s.seq)
+		s.orders[orderID] = "CREATED"
+		s.mu.Unlock()
+		log.Printf("[order] (session) 주문 수신 %s (%s, %d원) → 병렬 처리 시작", orderID, req.GetItem(), req.GetAmount())
+
+		// 주문마다 goroutine으로 병렬 처리. 수신 루프는 기다리지 않고 다음 Recv로 갑니다.
+		wg.Add(1)
+		go func(orderID string, req *orderpb.CreateOrderRequest) {
+			defer wg.Done()
+
+			// 금액이 클수록 심사가 오래 걸린다고 가정 (결과가 순서 없이 도착하는 걸 보여주기 위한 장치)
+			time.Sleep(time.Duration(req.GetAmount()) * time.Microsecond * 300)
+
+			// 결제는 1단계 unary rpc 재사용
+			if _, err := s.payment.ProcessPayment(stream.Context(), &paymentpb.ProcessPaymentRequest{
+				OrderId: orderID,
+				Amount:  req.GetAmount(),
+			}); err != nil {
+				log.Printf("[order] (session) %s 결제 실패: %v", orderID, err)
+				return
+			}
+
+			s.mu.Lock()
+			status := s.orders[orderID]
+			s.mu.Unlock()
+
+			sendMu.Lock()
+			err := stream.Send(&orderpb.OrderResult{OrderId: orderID, Item: req.GetItem(), Status: status})
+			sendMu.Unlock()
+			if err != nil {
+				log.Printf("[order] (session) %s 결과 전송 실패: %v", orderID, err)
+				return
+			}
+			log.Printf("[order] (session) %s (%s) 완료 → 결과 전송", orderID, req.GetItem())
+		}(orderID, req)
+	}
+
+	// 아직 처리 중인 주문들이 결과를 다 보낼 때까지 기다린 뒤 스트림을 닫습니다.
+	wg.Wait()
+	log.Printf("[order] (session) 세션 종료")
+	return nil
 }
 
 // UpdateOrderStatus payment-server가 결제 완료 후 이 메서드를 호출합니다.
