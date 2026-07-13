@@ -288,6 +288,127 @@ func (x *OrderProgress) GetMessage() string {
 	return ""
 }
 
+// 클라이언트가 스트림으로 하나씩 보내는 장바구니 상품.
+type CartItem struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Item          string                 `protobuf:"bytes,1,opt,name=item,proto3" json:"item,omitempty"`
+	Amount        int32                  `protobuf:"varint,2,opt,name=amount,proto3" json:"amount,omitempty"` // 상품 가격(원)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CartItem) Reset() {
+	*x = CartItem{}
+	mi := &file_proto_order_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CartItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CartItem) ProtoMessage() {}
+
+func (x *CartItem) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_order_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CartItem.ProtoReflect.Descriptor instead.
+func (*CartItem) Descriptor() ([]byte, []int) {
+	return file_proto_order_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *CartItem) GetItem() string {
+	if x != nil {
+		return x.Item
+	}
+	return ""
+}
+
+func (x *CartItem) GetAmount() int32 {
+	if x != nil {
+		return x.Amount
+	}
+	return 0
+}
+
+type CreateBulkOrderReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OrderId       string                 `protobuf:"bytes,1,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
+	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	ItemCount     int32                  `protobuf:"varint,3,opt,name=item_count,json=itemCount,proto3" json:"item_count,omitempty"`       // 받은 상품 수
+	TotalAmount   int32                  `protobuf:"varint,4,opt,name=total_amount,json=totalAmount,proto3" json:"total_amount,omitempty"` // 합산 금액
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateBulkOrderReply) Reset() {
+	*x = CreateBulkOrderReply{}
+	mi := &file_proto_order_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateBulkOrderReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateBulkOrderReply) ProtoMessage() {}
+
+func (x *CreateBulkOrderReply) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_order_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateBulkOrderReply.ProtoReflect.Descriptor instead.
+func (*CreateBulkOrderReply) Descriptor() ([]byte, []int) {
+	return file_proto_order_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *CreateBulkOrderReply) GetOrderId() string {
+	if x != nil {
+		return x.OrderId
+	}
+	return ""
+}
+
+func (x *CreateBulkOrderReply) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *CreateBulkOrderReply) GetItemCount() int32 {
+	if x != nil {
+		return x.ItemCount
+	}
+	return 0
+}
+
+func (x *CreateBulkOrderReply) GetTotalAmount() int32 {
+	if x != nil {
+		return x.TotalAmount
+	}
+	return 0
+}
+
 var File_proto_order_proto protoreflect.FileDescriptor
 
 const file_proto_order_proto_rawDesc = "" +
@@ -307,11 +428,21 @@ const file_proto_order_proto_rawDesc = "" +
 	"\rOrderProgress\x12\x19\n" +
 	"\border_id\x18\x01 \x01(\tR\aorderId\x12\x14\n" +
 	"\x05stage\x18\x02 \x01(\tR\x05stage\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage2\xf4\x01\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\"6\n" +
+	"\bCartItem\x12\x12\n" +
+	"\x04item\x18\x01 \x01(\tR\x04item\x12\x16\n" +
+	"\x06amount\x18\x02 \x01(\x05R\x06amount\"\x8b\x01\n" +
+	"\x14CreateBulkOrderReply\x12\x19\n" +
+	"\border_id\x18\x01 \x01(\tR\aorderId\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\x12\x1d\n" +
+	"\n" +
+	"item_count\x18\x03 \x01(\x05R\titemCount\x12!\n" +
+	"\ftotal_amount\x18\x04 \x01(\x05R\vtotalAmount2\xb7\x02\n" +
 	"\fOrderService\x12A\n" +
 	"\vCreateOrder\x12\x19.order.CreateOrderRequest\x1a\x17.order.CreateOrderReply\x12S\n" +
 	"\x11UpdateOrderStatus\x12\x1f.order.UpdateOrderStatusRequest\x1a\x1d.order.UpdateOrderStatusReply\x12L\n" +
-	"\x17CreateOrderWithProgress\x12\x19.order.CreateOrderRequest\x1a\x14.order.OrderProgress0\x01B\x1bZ\x19grpc-tutorial/gen/orderpbb\x06proto3"
+	"\x17CreateOrderWithProgress\x12\x19.order.CreateOrderRequest\x1a\x14.order.OrderProgress0\x01\x12A\n" +
+	"\x0fCreateBulkOrder\x12\x0f.order.CartItem\x1a\x1b.order.CreateBulkOrderReply(\x01B\x1bZ\x19grpc-tutorial/gen/orderpbb\x06proto3"
 
 var (
 	file_proto_order_proto_rawDescOnce sync.Once
@@ -325,23 +456,27 @@ func file_proto_order_proto_rawDescGZIP() []byte {
 	return file_proto_order_proto_rawDescData
 }
 
-var file_proto_order_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_proto_order_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_proto_order_proto_goTypes = []any{
 	(*CreateOrderRequest)(nil),       // 0: order.CreateOrderRequest
 	(*CreateOrderReply)(nil),         // 1: order.CreateOrderReply
 	(*UpdateOrderStatusRequest)(nil), // 2: order.UpdateOrderStatusRequest
 	(*UpdateOrderStatusReply)(nil),   // 3: order.UpdateOrderStatusReply
 	(*OrderProgress)(nil),            // 4: order.OrderProgress
+	(*CartItem)(nil),                 // 5: order.CartItem
+	(*CreateBulkOrderReply)(nil),     // 6: order.CreateBulkOrderReply
 }
 var file_proto_order_proto_depIdxs = []int32{
 	0, // 0: order.OrderService.CreateOrder:input_type -> order.CreateOrderRequest
 	2, // 1: order.OrderService.UpdateOrderStatus:input_type -> order.UpdateOrderStatusRequest
 	0, // 2: order.OrderService.CreateOrderWithProgress:input_type -> order.CreateOrderRequest
-	1, // 3: order.OrderService.CreateOrder:output_type -> order.CreateOrderReply
-	3, // 4: order.OrderService.UpdateOrderStatus:output_type -> order.UpdateOrderStatusReply
-	4, // 5: order.OrderService.CreateOrderWithProgress:output_type -> order.OrderProgress
-	3, // [3:6] is the sub-list for method output_type
-	0, // [0:3] is the sub-list for method input_type
+	5, // 3: order.OrderService.CreateBulkOrder:input_type -> order.CartItem
+	1, // 4: order.OrderService.CreateOrder:output_type -> order.CreateOrderReply
+	3, // 5: order.OrderService.UpdateOrderStatus:output_type -> order.UpdateOrderStatusReply
+	4, // 6: order.OrderService.CreateOrderWithProgress:output_type -> order.OrderProgress
+	6, // 7: order.OrderService.CreateBulkOrder:output_type -> order.CreateBulkOrderReply
+	4, // [4:8] is the sub-list for method output_type
+	0, // [0:4] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -358,7 +493,7 @@ func file_proto_order_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_order_proto_rawDesc), len(file_proto_order_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

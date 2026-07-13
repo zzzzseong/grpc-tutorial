@@ -1,10 +1,5 @@
-// order-server — 주문 서버.
-//
-// 이 프로세스 하나가 두 가지 역할을 동시에 합니다:
-//   - server 역할: OrderService를 구현하고 :50051 포트를 엽니다.
-//   - client 역할: payment-server의 PaymentService 스텁을 들고 결제를 호출합니다.
-//
-// 즉 "gRPC 서버 = 남을 못 부른다"가 아니라, 한 서버가 서버이자 클라이언트입니다.
+// order-server — 주문 서버
+
 package main
 
 import (
@@ -135,6 +130,65 @@ func (s *orderServer) CreateOrderWithProgress(req *orderpb.CreateOrderRequest, s
 	log.Printf("[order] (stream) 주문 %s 완료: 최종상태=%s", orderID, status)
 
 	return nil
+}
+
+// CreateBulkOrder [3단계: Client Streaming] 장바구니 주문.
+//
+// 2단계와 입장이 뒤집혔습니다:
+//   - 이번엔 서버인 내가 stream.Recv()로 여러 개를 받고,
+//   - 다 받으면 SendAndClose()로 응답 1개를 보내며 마무리합니다.
+//
+// 시그니처도 특이합니다: 요청 파라미터가 아예 없습니다.
+// 요청들이 stream 안에서 하나씩 나오기 때문입니다.
+func (s *orderServer) CreateBulkOrder(stream orderpb.OrderService_CreateBulkOrderServer) error {
+	var (
+		items []string
+		total int32
+	)
+
+	// 1. 클라이언트가 보내는 상품을 하나씩 수신.
+	//    클라이언트가 "다 보냈다"(CloseAndRecv)고 하면 io.EOF가 옵니다.
+	for {
+		item, err := stream.Recv()
+		if err == io.EOF {
+			break // 클라이언트 송신 종료 → 이제 응답할 차례
+		}
+		if err != nil {
+			return err
+		}
+		items = append(items, item.GetItem())
+		total += item.GetAmount()
+		log.Printf("[order] (bulk)   상품 수신: %s (%d원), 누적 %d원", item.GetItem(), item.GetAmount(), total)
+	}
+
+	// 2. 다 받았으니 주문 1건으로 합쳐서 생성
+	s.mu.Lock()
+	s.seq++
+	orderID := fmt.Sprintf("ORD-%03d", s.seq)
+	s.orders[orderID] = "CREATED"
+	s.mu.Unlock()
+	log.Printf("[order] (bulk) 주문 생성 %s: 상품 %d개, 합계 %d원 → 결제 요청", orderID, len(items), total)
+
+	// 3. 합산 금액으로 결제 (1단계 unary rpc 재사용)
+	if _, err := s.payment.ProcessPayment(stream.Context(), &paymentpb.ProcessPaymentRequest{
+		OrderId: orderID,
+		Amount:  total,
+	}); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	status := s.orders[orderID]
+	s.mu.Unlock()
+
+	// 4. SendAndClose: 응답 1개를 보내면서 스트림을 닫습니다.
+	//    (client streaming에서만 쓰는 전용 메서드)
+	return stream.SendAndClose(&orderpb.CreateBulkOrderReply{
+		OrderId:     orderID,
+		Status:      status,
+		ItemCount:   int32(len(items)),
+		TotalAmount: total,
+	})
 }
 
 // UpdateOrderStatus payment-server가 결제 완료 후 이 메서드를 호출합니다.

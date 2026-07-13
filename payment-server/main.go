@@ -1,8 +1,5 @@
-// payment-server — 결제 서버.
-//
-// order-server와 대칭 구조입니다:
-//   - server 역할: PaymentService를 구현하고 :50052 포트를 엽니다.
-//   - client 역할: order-server의 OrderService 스텁을 들고 상태 갱신을 호출합니다.
+// payment-server — 결제 서버
+
 package main
 
 import (

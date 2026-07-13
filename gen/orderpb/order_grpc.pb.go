@@ -28,6 +28,7 @@ const (
 	OrderService_CreateOrder_FullMethodName             = "/order.OrderService/CreateOrder"
 	OrderService_UpdateOrderStatus_FullMethodName       = "/order.OrderService/UpdateOrderStatus"
 	OrderService_CreateOrderWithProgress_FullMethodName = "/order.OrderService/CreateOrderWithProgress"
+	OrderService_CreateBulkOrder_FullMethodName         = "/order.OrderService/CreateBulkOrder"
 )
 
 // OrderServiceClient is the client API for OrderService service.
@@ -43,6 +44,11 @@ type OrderServiceClient interface {
 	// CreateOrder의 스트리밍 버전. 주문 생성~결제 완료까지의
 	// 진행 상황을 호출자에게 실시간으로 흘려보냅니다.
 	CreateOrderWithProgress(ctx context.Context, in *CreateOrderRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[OrderProgress], error)
+	// [3단계: Client Streaming]
+	// 이번엔 `stream`이 파라미터 쪽에 붙습니다.
+	// 클라이언트가 장바구니 상품을 하나씩 여러 번 보내고,
+	// 서버는 다 받은 뒤 합산해서 응답 1개로 마무리합니다.
+	CreateBulkOrder(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CartItem, CreateBulkOrderReply], error)
 }
 
 type orderServiceClient struct {
@@ -92,6 +98,19 @@ func (c *orderServiceClient) CreateOrderWithProgress(ctx context.Context, in *Cr
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type OrderService_CreateOrderWithProgressClient = grpc.ServerStreamingClient[OrderProgress]
 
+func (c *orderServiceClient) CreateBulkOrder(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CartItem, CreateBulkOrderReply], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &OrderService_ServiceDesc.Streams[1], OrderService_CreateBulkOrder_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[CartItem, CreateBulkOrderReply]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type OrderService_CreateBulkOrderClient = grpc.ClientStreamingClient[CartItem, CreateBulkOrderReply]
+
 // OrderServiceServer is the server API for OrderService service.
 // All implementations must embed UnimplementedOrderServiceServer
 // for forward compatibility.
@@ -105,6 +124,11 @@ type OrderServiceServer interface {
 	// CreateOrder의 스트리밍 버전. 주문 생성~결제 완료까지의
 	// 진행 상황을 호출자에게 실시간으로 흘려보냅니다.
 	CreateOrderWithProgress(*CreateOrderRequest, grpc.ServerStreamingServer[OrderProgress]) error
+	// [3단계: Client Streaming]
+	// 이번엔 `stream`이 파라미터 쪽에 붙습니다.
+	// 클라이언트가 장바구니 상품을 하나씩 여러 번 보내고,
+	// 서버는 다 받은 뒤 합산해서 응답 1개로 마무리합니다.
+	CreateBulkOrder(grpc.ClientStreamingServer[CartItem, CreateBulkOrderReply]) error
 	mustEmbedUnimplementedOrderServiceServer()
 }
 
@@ -123,6 +147,9 @@ func (UnimplementedOrderServiceServer) UpdateOrderStatus(context.Context, *Updat
 }
 func (UnimplementedOrderServiceServer) CreateOrderWithProgress(*CreateOrderRequest, grpc.ServerStreamingServer[OrderProgress]) error {
 	return status.Error(codes.Unimplemented, "method CreateOrderWithProgress not implemented")
+}
+func (UnimplementedOrderServiceServer) CreateBulkOrder(grpc.ClientStreamingServer[CartItem, CreateBulkOrderReply]) error {
+	return status.Error(codes.Unimplemented, "method CreateBulkOrder not implemented")
 }
 func (UnimplementedOrderServiceServer) mustEmbedUnimplementedOrderServiceServer() {}
 func (UnimplementedOrderServiceServer) testEmbeddedByValue()                      {}
@@ -192,6 +219,13 @@ func _OrderService_CreateOrderWithProgress_Handler(srv interface{}, stream grpc.
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type OrderService_CreateOrderWithProgressServer = grpc.ServerStreamingServer[OrderProgress]
 
+func _OrderService_CreateBulkOrder_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(OrderServiceServer).CreateBulkOrder(&grpc.GenericServerStream[CartItem, CreateBulkOrderReply]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type OrderService_CreateBulkOrderServer = grpc.ClientStreamingServer[CartItem, CreateBulkOrderReply]
+
 // OrderService_ServiceDesc is the grpc.ServiceDesc for OrderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -213,6 +247,11 @@ var OrderService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "CreateOrderWithProgress",
 			Handler:       _OrderService_CreateOrderWithProgress_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "CreateBulkOrder",
+			Handler:       _OrderService_CreateBulkOrder_Handler,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "proto/order.proto",
