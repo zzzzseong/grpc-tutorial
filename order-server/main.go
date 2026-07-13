@@ -13,9 +13,12 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	orderpb "grpc-tutorial/gen/orderpb"
 	paymentpb "grpc-tutorial/gen/paymentpb"
+	"grpc-tutorial/middleware"
 )
 
 type orderServer struct {
@@ -39,6 +42,14 @@ func (s *orderServer) CreateOrder(ctx context.Context, req *orderpb.CreateOrderR
 	s.mu.Unlock()
 	log.Printf("[order] 주문 생성 %s (%s, %d원) → payment-server에 결제 요청", orderID, req.GetItem(), req.GetAmount())
 
+	// [5단계: 메타데이터 전파] 들어온 메타데이터(x-request-id 등)를
+	// 나가는 호출에도 실어 보냅니다. 이렇게 해야 요청 추적 ID가
+	// trigger → order → payment까지 이어집니다.
+	// (실무에서는 필요한 키만 골라 전파합니다)
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		ctx = metadata.NewOutgoingContext(ctx, md)
+	}
+
 	// 2. payment-server 호출! 여기서 order-server는 client가 됩니다.
 	//    ctx를 그대로 넘기면 호출자의 데드라인이 payment-server까지 전파됩니다.
 	payRes, err := s.payment.ProcessPayment(ctx, &paymentpb.ProcessPaymentRequest{
@@ -46,7 +57,15 @@ func (s *orderServer) CreateOrder(ctx context.Context, req *orderpb.CreateOrderR
 		Amount:  req.GetAmount(),
 	})
 	if err != nil {
-		return nil, err
+		// [5단계: 에러 처리] status.Convert로 gRPC 상태 코드를 꺼내 분기할 수 있습니다.
+		st := status.Convert(err)
+		s.mu.Lock()
+		s.orders[orderID] = "PAYMENT_FAILED"
+		s.mu.Unlock()
+		log.Printf("[order] 주문 %s 결제 실패: code=%s, msg=%s", orderID, st.Code(), st.Message())
+
+		// 코드는 유지하고 내 계층의 컨텍스트를 덧붙여 호출자에게 전파합니다.
+		return nil, status.Errorf(st.Code(), "주문 %s 결제 실패: %s", orderID, st.Message())
 	}
 
 	// 3. 최종 상태를 읽어 응답.
@@ -291,7 +310,8 @@ func main() {
 		log.Fatalf("[order] 포트 열기 실패: %v", err)
 	}
 
-	g := grpc.NewServer()
+	// [5단계: 인터셉터] 모든 unary 호출을 로깅하는 미들웨어 등록
+	g := grpc.NewServer(grpc.UnaryInterceptor(middleware.UnaryLogging("order")))
 	orderpb.RegisterOrderServiceServer(g, srv)
 	log.Println("[order] gRPC 서버 시작 :50051")
 	if err := g.Serve(lis); err != nil {

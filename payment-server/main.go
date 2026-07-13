@@ -11,10 +11,13 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	orderpb "grpc-tutorial/gen/orderpb"
 	paymentpb "grpc-tutorial/gen/paymentpb"
+	"grpc-tutorial/middleware"
 )
 
 type paymentServer struct {
@@ -30,6 +33,16 @@ type paymentServer struct {
 // ProcessPayment order-server가 결제를 요청하면 실행 (payment-server가 server 역할).
 func (s *paymentServer) ProcessPayment(ctx context.Context, req *paymentpb.ProcessPaymentRequest) (*paymentpb.ProcessPaymentReply, error) {
 	log.Printf("[payment] 결제 요청 수신: %s, %d원", req.GetOrderId(), req.GetAmount())
+
+	// [5단계: 에러 처리] gRPC 에러는 일반 error가 아니라 status로 만듭니다.
+	// status = 표준 코드(codes.Xxx) + 메시지. 언어가 달라도 코드는 동일하게 전달됩니다.
+	// HTTP로 치면 400/403/500 같은 상태 코드 체계입니다.
+	if req.GetAmount() <= 0 {
+		return nil, status.Errorf(codes.InvalidArgument, "금액이 올바르지 않습니다: %d원", req.GetAmount())
+	}
+	if req.GetAmount() > 50000 {
+		return nil, status.Errorf(codes.FailedPrecondition, "결제 한도(50,000원) 초과: %d원", req.GetAmount())
+	}
 
 	// 1. (가짜) 결제 처리
 	s.mu.Lock()
@@ -111,7 +124,8 @@ func main() {
 		log.Fatalf("[payment] 포트 열기 실패: %v", err)
 	}
 
-	g := grpc.NewServer()
+	// [5단계: 인터셉터] 서버 생성 시 등록하면 모든 unary 호출이 이 미들웨어를 거칩니다.
+	g := grpc.NewServer(grpc.UnaryInterceptor(middleware.UnaryLogging("payment")))
 	paymentpb.RegisterPaymentServiceServer(g, srv)
 	log.Println("[payment] gRPC 서버 시작 :50052")
 	if err := g.Serve(lis); err != nil {

@@ -73,6 +73,8 @@ go run ./trigger          # 터미널 3: 주문 한 건 발사 — 1단계 unary
 go run ./trigger stream   # 터미널 3: 같은 주문을 2단계 streaming 버전으로
 go run ./trigger bulk     # 터미널 3: 장바구니 주문 — 3단계 client streaming 버전
 go run ./trigger session  # 터미널 3: 주문 세션 — 4단계 bidirectional streaming 버전
+go run ./trigger fail     # 터미널 3: 한도 초과 주문 — 5단계 에러 전파
+go run ./trigger deadline # 터미널 3: 1초 제한 스트리밍 — 5단계 데드라인 전파
 ```
 
 성공하면 trigger에 `주문 결과: id=ORD-001, status=PAID`가 출력되고, 두 서버 로그에서 상호 호출 과정을 볼 수 있습니다.
@@ -267,6 +269,58 @@ sequenceDiagram
 - **서버의 병렬 처리 + Send 뮤텍스**: 주문마다 goroutine으로 처리하되, `stream.Send`는 동시 호출이 금지라 뮤텍스로 직렬화합니다. 스트림 종료 전 `wg.Wait()`로 진행 중인 작업을 기다립니다.
 - **순서 보장의 범위**: gRPC는 "보낸 메시지의 전달 순서"는 보장하지만, 애플리케이션이 병렬 처리하면 "응답 생성 순서"는 애플리케이션 책임입니다.
 
-### ⬜ 5단계: 실무 필수 요소
+### ✅ 5단계: 실무 필수 요소 (완료)
 
-에러 처리(status code), 데드라인 전파, 메타데이터, 인터셉터(인증·로깅 미들웨어).
+통신 방식 4가지 위에 실무에서 반드시 얹게 되는 것들 — 에러 처리, 메타데이터, 인터셉터, 데드라인 전파.
+
+**추가된 것**
+
+| 무엇 | 어디에 |
+|---|---|
+| 결제 한도 검증 + `status.Errorf(codes.FailedPrecondition, ...)` | payment-server의 `ProcessPayment` |
+| 에러 코드 읽기(`status.Convert`) + 컨텍스트 덧붙여 전파 | order-server의 `CreateOrder` |
+| `x-request-id` 메타데이터 첨부/전파 | trigger(첨부) → order-server(전파) |
+| 로깅 인터셉터 (`middleware/interceptor.go`) | 두 서버의 `grpc.NewServer(...)` 등록 |
+| 실행 | `go run ./trigger fail`, `go run ./trigger deadline` |
+
+**① 에러 처리** — gRPC 에러는 표준 코드(`codes.Xxx`) + 메시지의 `status`로 만듭니다. HTTP의 400/403/500 같은 체계라 언어가 달라도 동일하게 전달됩니다:
+
+```mermaid
+sequenceDiagram
+    participant T as trigger
+    participant O as order-server
+    participant P as payment-server
+
+    T->>O: CreateOrder(노트북, 60000원)
+    O->>P: ProcessPayment(ORD-002, 60000원)
+    P--xO: ❌ FailedPrecondition: 한도(50,000원) 초과
+    Note over O: status.Convert로 코드 확인<br/>주문 상태 → PAYMENT_FAILED
+    O--xT: ❌ FailedPrecondition: 주문 ORD-002 결제 실패: 한도 초과
+    Note over T: 코드는 그대로, 메시지엔 각 계층의 컨텍스트가 쌓임
+```
+
+**② 메타데이터 + 인터셉터** — 메타데이터는 본문 밖에 실리는 key-value(HTTP 헤더 격), 인터셉터는 모든 호출의 앞뒤에 끼는 미들웨어입니다. trigger가 붙인 `x-request-id`가 두 서버의 인터셉터 로그에 그대로 찍혀, 호출 체인 전체를 하나의 ID로 추적할 수 있습니다:
+
+```
+[order]   (interceptor) /order.OrderService/CreateOrder     | req-id=req-52170 | 32ms | code=OK
+[payment] (interceptor) /payment.PaymentService/ProcessPayment | req-id=req-52170 | 16ms | code=OK
+```
+
+**③ 데드라인 전파** — `ctx`에 건 데드라인은 호출 체인을 따라 자동 전파됩니다. 1초 제한으로 스트리밍(총 1.4초 소요)을 호출하면:
+
+```
+[trigger] ORD-003 | CREATED             | 주문 접수
+[trigger] ORD-003 | PAYMENT_VALIDATING  | 결제 진행 중
+[trigger] ORD-003 | PAYMENT_AUTHORIZING | 결제 진행 중
+[trigger] 스트림 중단 — code=DeadlineExceeded        ← 1초 시점에 중단
+```
+
+이때 **두 홉 건너에 있는 payment-server의 진행 중이던 작업까지** `context canceled`로 함께 중단됩니다. 호출자가 포기한 요청을 하위 서버들이 헛되이 계속 처리하지 않게 해주는, 마이크로서비스에서 아주 중요한 메커니즘입니다.
+
+배운 것:
+
+- **에러는 status로**: `status.Errorf(codes.Xxx, ...)`로 만들고 `status.Convert(err)`로 읽습니다. 코드는 유지한 채 각 계층이 메시지에 컨텍스트를 덧붙여 전파하는 것이 관례입니다.
+- **자주 쓰는 코드**: `InvalidArgument`(잘못된 입력), `NotFound`, `FailedPrecondition`(상태가 조건에 안 맞음), `Unauthenticated`/`PermissionDenied`(인증/인가), `DeadlineExceeded`, `Unavailable`(재시도 대상).
+- **메타데이터**: `metadata.AppendToOutgoingContext`(클라이언트가 첨부) ↔ `metadata.FromIncomingContext`(서버가 읽기). 하위 호출로 자동 전파되지 않으므로 필요한 키는 직접 옮겨 실어야 합니다.
+- **인터셉터**: `grpc.UnaryInterceptor(...)`로 등록하는 서버 미들웨어. 로깅·인증·패닉 복구·모니터링이 단골 용도입니다. 스트리밍 rpc에는 `grpc.StreamInterceptor`를 따로 등록합니다.
+- **데드라인 전파**: 서버 구현에서 받은 `ctx`를 하위 호출에 그대로 넘기기만 하면 전파는 자동입니다. 이것이 지금까지 모든 예제에서 `ctx`를 꼬박꼬박 넘긴 이유입니다.

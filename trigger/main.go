@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -11,6 +12,8 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	orderpb "grpc-tutorial/gen/orderpb"
 )
@@ -29,10 +32,18 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// `go run ./trigger`         → 1단계 unary 버전
-	// `go run ./trigger stream`  → 2단계 server streaming 버전
-	// `go run ./trigger bulk`    → 3단계 client streaming 버전
-	// `go run ./trigger session` → 4단계 bidirectional streaming 버전
+	// [5단계: 메타데이터] 요청 추적 ID를 실어 보냅니다. HTTP 헤더 같은 존재라
+	// 어떤 rpc를 호출하든 함께 전달되고, 서버의 인터셉터가 이걸 읽어 로깅합니다.
+	reqID := fmt.Sprintf("req-%d", os.Getpid())
+	ctx = metadata.AppendToOutgoingContext(ctx, "x-request-id", reqID)
+	log.Printf("[trigger] x-request-id=%s", reqID)
+
+	// `go run ./trigger`          → 1단계 unary 버전
+	// `go run ./trigger stream`   → 2단계 server streaming 버전
+	// `go run ./trigger bulk`     → 3단계 client streaming 버전
+	// `go run ./trigger session`  → 4단계 bidirectional streaming 버전
+	// `go run ./trigger fail`     → 5단계 에러 처리 (결제 한도 초과)
+	// `go run ./trigger deadline` → 5단계 데드라인 전파 (1초 제한)
 	mode := ""
 	if len(os.Args) > 1 {
 		mode = os.Args[1]
@@ -44,6 +55,10 @@ func main() {
 		runBulk(ctx, client)
 	case "session":
 		runSession(ctx, client)
+	case "fail":
+		runFail(ctx, client)
+	case "deadline":
+		runDeadline(client)
 	default:
 		runUnary(ctx, client)
 	}
@@ -174,4 +189,55 @@ func runSession(ctx context.Context, client orderpb.OrderServiceClient) {
 
 	<-done // 수신 goroutine이 io.EOF를 만날 때까지 대기
 	log.Println("[trigger] 세션 종료")
+}
+
+// runFail [5단계: 에러 처리] 결제 한도(50,000원)를 넘는 주문을 일부러 보냅니다.
+//
+// payment-server가 만든 FailedPrecondition 에러가
+// order-server를 거쳐 여기까지 코드 그대로 전파되는 걸 확인합니다.
+func runFail(ctx context.Context, client orderpb.OrderServiceClient) {
+	res, err := client.CreateOrder(ctx, &orderpb.CreateOrderRequest{
+		Item:   "노트북",
+		Amount: 60000, // 한도 초과!
+	})
+	if err != nil {
+		// status.Convert: error에서 gRPC 상태(코드 + 메시지)를 꺼냅니다.
+		st := status.Convert(err)
+		log.Printf("[trigger] 주문 실패 — code=%s", st.Code())
+		log.Printf("[trigger]          message=%s", st.Message())
+		return
+	}
+	log.Printf("[trigger] 주문 결과: id=%s, status=%s", res.GetOrderId(), res.GetStatus())
+}
+
+// runDeadline [5단계: 데드라인 전파] 1초짜리 빡빡한 데드라인으로 스트리밍을 호출합니다.
+//
+// payment-server의 결제는 1.4초 이상 걸리므로 중간에 데드라인이 터집니다.
+// 포인트: 데드라인은 ctx를 타고 trigger → order → payment까지 전파되어,
+// 두 홉 건너에 있는 payment-server의 작업까지 함께 중단됩니다.
+func runDeadline(client orderpb.OrderServiceClient) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	stream, err := client.CreateOrderWithProgress(ctx, &orderpb.CreateOrderRequest{
+		Item:   "커피",
+		Amount: 4500,
+	})
+	if err != nil {
+		log.Fatalf("주문 실패: %v", err)
+	}
+
+	for {
+		prog, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			st := status.Convert(err)
+			log.Printf("[trigger] 스트림 중단 — code=%s, message=%s", st.Code(), st.Message())
+			return
+		}
+		log.Printf("[trigger] %s | %-20s | %s", prog.GetOrderId(), prog.GetStage(), prog.GetMessage())
+	}
+	log.Println("[trigger] 스트림 종료 (데드라인 안에 완료됨)")
 }
